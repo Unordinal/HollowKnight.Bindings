@@ -1,5 +1,6 @@
 ﻿using System.Collections;
 using System.Collections.Generic;
+using System.Reflection;
 using JetBrains.Annotations;
 using Modding;
 using MonoMod.RuntimeDetour;
@@ -10,6 +11,16 @@ namespace Bindings
     [UsedImplicitly]
     public class Bindings : Mod, ITogglableMod
     {
+        private static readonly string[] BindingProperties =
+        {
+            nameof(BossSequenceController.BoundNail),
+            //nameof(BossSequenceController.BoundCharms),
+            nameof(BossSequenceController.BoundShell),
+            nameof(BossSequenceController.BoundSoul)
+        };
+
+        private readonly List<Detour> _detours = new List<Detour>();
+
         [UsedImplicitly]
         public static bool True() => true;
 
@@ -23,16 +34,6 @@ namespace Bindings
 
         [UsedImplicitly]
         public static int BoundMaxHealth() => 4;
-
-        private readonly string[] BindingProperties =
-        {
-            nameof(BossSequenceController.BoundNail),
-            nameof(BossSequenceController.BoundCharms),
-            nameof(BossSequenceController.BoundShell),
-            nameof(BossSequenceController.BoundSoul)
-        };
-
-        private readonly List<Detour> _detours = new List<Detour>();
 
         public override void Initialize()
         {
@@ -56,7 +57,7 @@ namespace Bindings
                     typeof(Bindings).GetMethod(nameof(BoundNailDamage))
                 )
             );
-            
+
             _detours.Add
             (
                 new Detour
@@ -72,13 +73,49 @@ namespace Bindings
             On.GGCheckBoundSoul.OnEnter += CheckBoundSoulEnter;
         }
 
+        public void Unload()
+        {
+            foreach (Detour d in _detours)
+            {
+                d.Dispose();
+            }
+
+            _detours.Clear();
+
+            ModHooks.Instance.SavegameLoadHook -= OnLoad;
+            ModHooks.Instance.NewGameHook -= NewGame;
+            On.BossSceneController.RestoreBindings -= NoOp;
+            On.GGCheckBoundSoul.OnEnter -= CheckBoundSoulEnter;
+
+            if (!GameManager.instance || !HeroController.instance)
+            {
+                return;
+            }
+
+            var currDataField = typeof(BossSequenceController).GetField("currentData", BindingFlags.NonPublic | BindingFlags.Static);
+            if (currDataField.GetValue(null) is BossSequenceController.BossSequenceData currData)
+            {
+                currData.bindings = BossSequenceController.ChallengeBindings.None;
+            }
+
+            GameManager.instance.playerData.ClearMP();
+            GameManager.instance.playerData.MaxHealth();
+            EventRegister.SendEvent("UPDATE BLUE HEALTH");
+            EventRegister.SendEvent("HIDE BOUND NAIL");
+            PlayMakerFSM.BroadcastEvent("CHARM EQUIP CHECK");
+            EventRegister.SendEvent("HIDE BOUND CHARMS");
+            GameManager.instance.soulOrb_fsm.SendEvent("MP LOSE");
+            EventRegister.SendEvent("UNBIND VESSEL ORB");
+            PlayMakerFSM.BroadcastEvent("CHARM INDICATOR CHECK");
+        }
+
         private static void CheckBoundSoulEnter(On.GGCheckBoundSoul.orig_OnEnter orig, GGCheckBoundSoul self)
         {
             self.Fsm.Event(self.boundEvent);
             self.Finish();
         }
 
-        private static void NoOp(On.BossSceneController.orig_RestoreBindings orig, BossSceneController self) {}
+        private static void NoOp(On.BossSceneController.orig_RestoreBindings orig, BossSceneController self) { }
 
         private static void NewGame() => OnLoad();
 
@@ -96,39 +133,24 @@ namespace Bindings
         private static IEnumerator ShowIconsCoroutine()
         {
             yield return new WaitWhile(() => HeroController.instance == null);
-            
+
             yield return null;
-            
+
             EventRegister.SendEvent("SHOW BOUND NAIL");
-            EventRegister.SendEvent("SHOW BOUND CHARMS");
+            //EventRegister.SendEvent("SHOW BOUND CHARMS");
             EventRegister.SendEvent("BIND VESSEL ORB");
 
             // You need to lose/gain soul for this to happen, so we just set it explicitly.
             GameManager.instance.soulOrb_fsm.SetState("Bound");
-            
-            if (PlayerData.instance.equippedCharms.Count == 0) yield break;
-            
+
+            /*if (PlayerData.instance.equippedCharms.Count == 0) yield break;
+
             foreach (int charm in PlayerData.instance.equippedCharms)
             {
                 GameManager.instance.SetPlayerDataBool($"equippedCharm_{charm}", false);
             }
-            
-            PlayerData.instance.equippedCharms.Clear();
-        }
 
-        public void Unload()
-        {
-            foreach (Detour d in _detours)
-            {
-                d.Dispose();
-            }
-            
-            _detours.Clear();
-            
-            ModHooks.Instance.SavegameLoadHook -= OnLoad;
-            ModHooks.Instance.NewGameHook -= NewGame;
-            On.BossSceneController.RestoreBindings -= NoOp;
-            On.GGCheckBoundSoul.OnEnter -= CheckBoundSoulEnter;
+            PlayerData.instance.equippedCharms.Clear();*/
         }
     }
 }
